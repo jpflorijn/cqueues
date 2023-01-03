@@ -2839,7 +2839,7 @@ static void cstack_push(struct cstack *CS, struct stackinfo *info) {
 
 static void cstack_pop(struct cstack *CS) {
 	CS->running = CS->running->running;
-} /* cstack_push() */
+} /* cstack_pop() */
 
 
 static _Bool cstack_isrunning(const struct cstack *CS, const struct cqueue *Q) {
