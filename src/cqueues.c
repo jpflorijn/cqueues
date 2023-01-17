@@ -1149,7 +1149,7 @@ struct thread {
 	unsigned count;
 
 	struct threads *threads;
-	LIST_ENTRY(thread) le;
+	TAILQ_ENTRY(thread) tqe;
 
 	double mintimeout;
 
@@ -1172,7 +1172,7 @@ struct cqueue {
 	} pool;
 
 	struct {
-		LIST_HEAD(threads, thread) polling, pending;
+		TAILQ_HEAD(threads, thread) polling, pending;
 		struct thread *current;
 		unsigned count;
 	} thread;
@@ -1256,7 +1256,7 @@ static struct cqueue *cqueue_enter(lua_State *L, struct callinfo *I, int index) 
 
 
 static cqs_error_t cqueue_tryalert(struct cqueue *Q) {
-	if (!cstack_isrunning(Q->cstack, Q) || LIST_EMPTY(&Q->thread.pending)) {
+	if (!cstack_isrunning(Q->cstack, Q) || TAILQ_EMPTY(&Q->thread.pending)) {
 		return kpoll_alert(&Q->kp);
 	} else {
 		return 0;
@@ -1394,6 +1394,8 @@ static void cqueue_preinit(struct cqueue *Q) {
 	kpoll_preinit(&Q->kp);
 
 	Q->thread.current = NULL;
+	TAILQ_INIT(&Q->thread.polling);
+	TAILQ_INIT(&Q->thread.pending);
 
 	pool_init(&Q->pool.wakecb, sizeof (struct wakecb));
 	pool_init(&Q->pool.fileno, sizeof (struct fileno));
@@ -1445,11 +1447,11 @@ static void cqueue_destroy(lua_State *L, struct cqueue *Q, struct callinfo *I) {
 
 	Q->thread.current = NULL;
 
-	while ((thread = LIST_FIRST(&Q->thread.pending))) {
+	while ((thread = TAILQ_FIRST(&Q->thread.pending))) {
 		thread_del(L, Q, I, thread);
 	}
 
-	while ((thread = LIST_FIRST(&Q->thread.polling))) {
+	while ((thread = TAILQ_FIRST(&Q->thread.polling))) {
 		thread_del(L, Q, I, thread);
 	}
 
@@ -1516,11 +1518,11 @@ static int cqueue__gc(lua_State *L) {
 } /* cqueue__gc() */
 
 
-static void thread_move(struct thread *T, struct threads *list) {
-	if (T->threads != list) {
-		LIST_REMOVE(T, le);
-		LIST_INSERT_HEAD(list, T, le);
-		T->threads = list;
+static void thread_move(struct thread *T, struct threads *tq) {
+	if (T->threads != tq) {
+		TAILQ_REMOVE(T->threads, T, tqe);
+		TAILQ_INSERT_TAIL(tq, T, tqe);
+		T->threads = tq;
 	}
 } /* thread_move() */
 
@@ -1889,7 +1891,7 @@ static void thread_add(lua_State *L, struct cqueue *Q, struct callinfo *I, int i
 	lua_rawsetp(L, -2, CQS_UNIQUE_LIGHTUSERDATA_MASK(T));
 	lua_pop(L, 2);
 
-	LIST_INSERT_HEAD(&Q->thread.pending, T, le);
+	TAILQ_INSERT_HEAD(&Q->thread.pending, T, tqe);
 	T->threads = &Q->thread.pending;
 	Q->thread.count++;
 } /* thread_add() */
@@ -1902,7 +1904,7 @@ static void thread_del(lua_State *L, struct cqueue *Q, struct callinfo *I, struc
 		event_del(Q, event);
 	}
 	timer_destroy(Q, &T->timer);
-	LIST_REMOVE(T, le);
+	TAILQ_REMOVE(T->threads, T, tqe);
 	Q->thread.count--;
 
 	/*
@@ -1976,7 +1978,7 @@ static cqs_error_t cqueue_reboot(struct cqueue *Q, _Bool stop, _Bool restart) {
 			fileno->state = 0;
 		}
 
-		while ((thread = LIST_FIRST(&Q->thread.polling))) {
+		while ((thread = TAILQ_FIRST(&Q->thread.polling))) {
 			thread_move(thread, &Q->thread.pending);
 		}
 
@@ -2127,7 +2129,7 @@ static cqs_status_t cqueue_process_threads(lua_State *L, struct cqueue *Q, struc
 	struct thread *nxt;
 
 	for (; Q->thread.current; Q->thread.current = nxt) {
-		nxt = LIST_NEXT(Q->thread.current, le);
+		nxt = TAILQ_NEXT(Q->thread.current, tqe);
 
 		if (LUA_OK != (status = cqueue_resume(L, Q, I, Q->thread.current))) {
 			return status;
@@ -2180,7 +2182,7 @@ static cqs_status_t cqueue_process(lua_State *L, struct cqueue *Q, struct callin
 	}
 
 	assert(NULL == Q->thread.current);
-	Q->thread.current = LIST_FIRST(&Q->thread.pending);
+	Q->thread.current = TAILQ_FIRST(&Q->thread.pending);
 	if (LUA_OK != (status = cqueue_process_threads(L, Q, I))) {
 		return status;
 	}
@@ -2275,7 +2277,7 @@ static int cqueue_step(lua_State *L) {
 		return luaL_error(L, "cannot step live cqueue");
 	}
 
-	if (Q->thread.count && LIST_EMPTY(&Q->thread.pending)) {
+	if (Q->thread.count && TAILQ_EMPTY(&Q->thread.pending)) {
 		timeout = mintimeout(luaL_optnumber(L, 2, NAN), cqueue_timeout_(Q));
 	} else {
 		timeout = 0.0;
@@ -2671,7 +2673,7 @@ static int cqueue_events(lua_State *L) {
 static int cqueue_timeout(lua_State *L) {
 	struct cqueue *Q = cqueue_checkself(L, 1);
 
-	if (!LIST_EMPTY(&Q->thread.pending)) {
+	if (!TAILQ_EMPTY(&Q->thread.pending)) {
 		lua_pushnumber(L, 0.0);
 	} else {
 		double timeout = cqueue_timeout_(Q);
