@@ -332,7 +332,7 @@ static inline double mintimeout(double a, double b) {
 
 
 /*
- * M E M O R Y  M A N A G M E N T  R O U T I N E S
+ * M E M O R Y  M A N A G E M E N T  R O U T I N E S
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
